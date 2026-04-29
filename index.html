@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ImageSync — Предпросмотр и скачивание</title>
+  <style>
+    :root {
+      --bg: #020617;
+      --bg2: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --panel-3: #0b1220;
+      --border: rgba(255,255,255,0.08);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --accent2: #38d9a9;
+      --violet: #7c6af7;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --shadow: 0 10px 30px rgba(0,0,0,0.35);
+      --active: rgba(56,189,248,0.14);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(2,6,23,0.9); backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px; display: flex; align-items: center; gap: 24px; height: 54px;
+    }
+
+    .brand {
+      font-size: 17px; font-weight: 800; letter-spacing: -0.5px; white-space: nowrap;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+
+    .tab-nav { display: flex; gap: 2px; }
+
+    .tab-btn {
+      appearance: none; border: none; background: transparent; color: var(--muted);
+      font-size: 13.5px; font-weight: 600; cursor: pointer; padding: 6px 15px;
+      border-radius: 8px; transition: all 0.15s; display: flex; align-items: center; gap: 7px; white-space: nowrap;
+    }
+    .tab-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+    .tab-btn.active { background: rgba(56,189,248,0.11); color: var(--accent); }
+    .tab-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.65; }
+
+    .page { display: none; }
+    .page.active { display: block; }
+
+    /* ── SHARED BUTTONS ── */
+    button {
+      appearance: none; border: 0; border-radius: 10px; padding: 9px 15px;
+      font-size: 13px; font-weight: 700; cursor: pointer; transition: 0.15s ease;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    button:disabled { opacity: 0.4; pointer-events: none; }
+    .btn-primary { background: var(--accent); color: #001018; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-violet { background: var(--violet); color: white; }
+    .btn-violet:hover { background: #8f7ef8; transform: translateY(-1px); }
+    .btn-secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: #283548; }
+    .btn-outline { background: transparent; color: var(--accent2); border: 1px solid var(--accent2); }
+    .btn-outline:hover { background: rgba(56,217,169,0.08); }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--muted); color: var(--text); }
+
+    /* ── BADGES ── */
+    .badge {
+      display: inline-flex; align-items: center; border-radius: 999px;
+      padding: 2px 7px; font-size: 10px; font-weight: 700; border: 1px solid transparent; white-space: nowrap;
+    }
+    .badge-ok { background: rgba(34,197,94,0.1); color: #bbf7d0; border-color: rgba(34,197,94,0.22); }
+    .badge-warn { background: rgba(245,158,11,0.1); color: #fde68a; border-color: rgba(245,158,11,0.22); }
+    .badge-error { background: rgba(239,68,68,0.1); color: #fecaca; border-color: rgba(239,68,68,0.22); }
+    .badge-muted { background: rgba(148,163,184,0.1); color: #cbd5e1; border-color: rgba(148,163,184,0.18); }
+    .badge-violet { background: rgba(124,106,247,0.12); color: #c4bbfc; border-color: rgba(124,106,247,0.22); }
+    .badge-teal { background: rgba(56,217,169,0.12); color: #a7f3d0; border-color: rgba(56,217,169,0.22); }
+
+    /* ════════════════════
+       PAGE 1 — PREVIEW
+    ════════════════════ */
+    .app-preview {
+      display: grid; grid-template-columns: 410px 1fr; min-height: calc(100vh - 54px);
+    }
+
+    .sidebar {
+      background: rgba(17,24,39,0.93); border-right: 1px solid var(--border);
+      padding: 20px 18px; position: sticky; top: 54px;
+      height: calc(100vh - 54px); overflow: auto; backdrop-filter: blur(10px);
+    }
+    .sidebar::-webkit-scrollbar { width: 4px; }
+    .sidebar::-webkit-scrollbar-track { background: transparent; }
+    .sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+    .sidebar h1 { font-size: 19px; line-height: 1.2; margin-bottom: 6px; }
+    .subtitle { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; line-height: 1.5; }
+
+    label { display: block; font-size: 13px; margin-bottom: 6px; font-weight: 600; }
+
+    textarea {
+      width: 100%; min-height: 180px; resize: vertical;
+      border: 1px solid var(--border); background: var(--panel-3); color: var(--text);
+      border-radius: 11px; padding: 11px 13px; font: 12.5px/1.5 var(--mono); outline: none;
+    }
+    textarea:focus { border-color: rgba(56,189,248,0.45); box-shadow: 0 0 0 3px rgba(56,189,248,0.1); }
+
+    .controls { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
+
+    .info-box {
+      margin-top: 11px; padding: 9px 12px; border-radius: 9px;
+      font-size: 12px; line-height: 1.55;
+    }
+    .info-box.status { background: rgba(255,255,255,0.04); border: 1px solid var(--border); }
+    .info-box.preload { background: rgba(255,255,255,0.04); border: 1px solid var(--border); }
+    .info-box.hint { background: rgba(56,189,248,0.07); color: #c8f2ff; border: 1px solid rgba(56,189,248,0.15); }
+    .info-box.legend { background: rgba(255,255,255,0.04); border: 1px solid var(--border); line-height: 1.8; }
+    .info-box.message { display: none; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.2); color: #fde68a; }
+    .info-box.message.show { display: block; }
+
+    .prog-bar-bg { width: 100%; height: 5px; background: rgba(255,255,255,0.07); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+    .prog-bar-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 0.2s ease; }
+    .fill-green { background: linear-gradient(90deg, var(--success), #4ade80); }
+    .fill-blue { background: linear-gradient(90deg, var(--violet), var(--accent2)); }
+
+    .links-panel { margin-top: 11px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); border-radius: 11px; overflow: hidden; }
+    .links-panel-header { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 700; background: rgba(255,255,255,0.025); }
+    .links-list { max-height: 280px; overflow: auto; }
+    .links-list::-webkit-scrollbar { width: 4px; }
+    .links-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+    .empty-links { padding: 12px; color: var(--muted); font-size: 12px; }
+
+    .link-item {
+      display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left;
+      background: transparent; color: var(--text); border: 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04); padding: 8px 11px; border-radius: 0; cursor: pointer; font-size: 12px; font-weight: 400;
+    }
+    .link-item:hover { background: rgba(255,255,255,0.03); }
+    .link-item.active { background: var(--active); outline: 1px solid rgba(56,189,248,0.2); }
+    .link-index { flex: 0 0 auto; min-width: 22px; color: var(--accent); font-weight: 700; padding-top: 1px; }
+    .link-text-wrap { min-width: 0; flex: 1; }
+    .link-text { display: block; font-size: 11.5px; line-height: 1.45; word-break: break-all; }
+    .link-meta { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+
+    /* viewer */
+    .viewer-wrap { display: flex; flex-direction: column; min-height: calc(100vh - 54px); padding: 18px; gap: 13px; }
+
+    .viewer {
+      position: relative; flex: 1; min-height: 320px; border: 1px solid var(--border);
+      border-radius: 17px;
+      background: radial-gradient(circle at top left, rgba(56,189,248,0.07), transparent 35%), rgba(2,6,23,0.6);
+      box-shadow: var(--shadow); overflow: hidden; display: flex; align-items: center; justify-content: center;
+    }
+
+    .viewer-stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 18px; }
+
+    .viewer img {
+      max-width: 100%; max-height: calc(100vh - 270px); object-fit: contain;
+      display: block; border-radius: 8px; box-shadow: 0 6px 22px rgba(0,0,0,0.25);
+    }
+
+    .placeholder, .loading {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 22px; width: min(900px, 100%); min-height: 200px;
+      border-radius: 13px; border: 1px dashed rgba(255,255,255,0.11); background: rgba(255,255,255,0.025);
+    }
+    .placeholder h2, .loading h2 { margin-bottom: 8px; font-size: 19px; }
+    .placeholder p, .loading p { color: var(--muted); line-height: 1.6; word-break: break-word; margin: 0; font-size: 12.5px; }
+    .error-box { background: rgba(239,68,68,0.07) !important; border: 1px solid rgba(239,68,68,0.2) !important; color: #fecaca; }
+
+    .spinner { width: 36px; height: 36px; border-radius: 999px; border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--accent); animation: spin 0.8s linear infinite; margin-bottom: 11px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .footer {
+      display: grid; grid-template-columns: auto 1fr auto; gap: 11px; align-items: center;
+      border: 1px solid var(--border); background: rgba(17,24,39,0.75);
+      border-radius: 14px; padding: 11px 13px; box-shadow: var(--shadow);
+    }
+
+    .nav-group { display: flex; gap: 7px; align-items: center; }
+    .nav-btn { min-width: 42px; min-height: 42px; font-size: 18px; line-height: 1; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--text); border: 1px solid var(--border) !important; }
+    .nav-btn:hover:not(:disabled) { background: #2f3d52; transform: translateY(-1px); }
+    .nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .meta { min-width: 0; }
+    .counter { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
+    .url-line { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .url-line a { color: #c8f2ff; text-decoration: none; }
+    .url-line a:hover { text-decoration: underline; }
+    .kbd-note { font-size: 11.5px; color: var(--muted); text-align: right; }
+    .empty-state { color: var(--muted); }
+
+    .details-box { border: 1px solid var(--border); background: rgba(255,255,255,0.03); border-radius: 13px; padding: 13px; font-size: 12.5px; line-height: 1.6; }
+    .details-box h3 { margin: 0 0 9px; font-size: 13px; }
+    .details-grid { display: grid; grid-template-columns: 165px 1fr; gap: 4px 9px; }
+    .details-key { color: var(--muted); }
+    .details-val { min-width: 0; word-break: break-word; }
+
+    /* ════════════════════
+       PAGE 2 — DOWNLOADER
+    ════════════════════ */
+    .app-dl { max-width: 880px; margin: 0 auto; padding: 34px 22px 80px; }
+
+    .dl-title { font-size: 21px; font-weight: 800; margin-bottom: 4px; background: linear-gradient(135deg, var(--violet), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .dl-sub { font-size: 12px; color: var(--muted); font-family: var(--mono); margin-bottom: 32px; }
+
+    .card { background: rgba(17,24,39,0.7); border: 1px solid var(--border); border-radius: 13px; padding: 22px; margin-bottom: 16px; position: relative; overflow: hidden; }
+    .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(124,106,247,0.22), transparent); }
+
+    .card-label { font-size: 10px; font-family: var(--mono); color: var(--violet); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .card-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    .dropzone { border: 2px dashed var(--border); border-radius: 9px; padding: 32px 18px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; }
+    .dropzone:hover, .dropzone.dragover { border-color: var(--violet); background: rgba(124,106,247,0.05); }
+    .dropzone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .drop-icon { font-size: 2rem; margin-bottom: 9px; display: block; }
+    .drop-text { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .drop-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+    .field { margin-bottom: 13px; }
+    .field label { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 5px; font-weight: 400; }
+    .field input { width: 100%; background: rgba(11,18,32,0.9); border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; color: var(--text); font-family: var(--mono); font-size: 12.5px; outline: none; transition: border-color 0.2s; }
+    .field input:focus { border-color: var(--violet); }
+
+    .domain-preview { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 5px; }
+    .domain-preview span { color: var(--accent2); }
+
+    .preview-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; margin-top: 13px; }
+    .preview-table th { color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-size: 9.5px; padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--border); }
+    .preview-table td { padding: 6px 9px; border-bottom: 1px solid rgba(255,255,255,0.04); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .preview-table td:first-child { color: var(--text); }
+    .preview-table td:last-child { color: var(--accent2); }
+
+    .stats-row { display: flex; gap: 9px; margin-bottom: 16px; flex-wrap: wrap; }
+    .stat { flex: 1; min-width: 80px; background: rgba(11,18,32,0.9); border: 1px solid var(--border); border-radius: 9px; padding: 12px 10px; text-align: center; }
+    .stat-val { font-size: 1.6rem; font-weight: 800; font-family: var(--mono); line-height: 1; margin-bottom: 3px; }
+    .stat-lbl { font-size: 9px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); }
+    .s-total .stat-val { color: var(--violet); }
+    .s-ok .stat-val { color: var(--accent2); }
+    .s-skip .stat-val { color: var(--muted); }
+    .s-err .stat-val { color: var(--danger); }
+
+    .prog-labels { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-bottom: 5px; }
+
+    .current-file { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 7px; display: flex; align-items: center; gap: 6px; }
+    .pulse { width: 6px; height: 6px; background: var(--accent2); border-radius: 50%; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.8); } }
+
+    .error-log { background: rgba(11,18,32,0.9); border: 1px solid rgba(239,68,68,0.16); border-radius: 9px; max-height: 190px; overflow-y: auto; font-family: var(--mono); font-size: 11px; padding: 9px 11px; }
+    .error-log::-webkit-scrollbar { width: 4px; }
+    .error-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .err-entry { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: grid; grid-template-columns: 34px 1fr auto; gap: 7px; align-items: start; }
+    .err-entry:last-child { border: none; }
+    .err-row { color: var(--muted); }
+    .err-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .err-code { color: var(--danger); white-space: nowrap; font-weight: 700; }
+
+    .complete-banner { background: linear-gradient(135deg, rgba(56,217,169,0.07), rgba(124,106,247,0.07)); border: 1px solid rgba(56,217,169,0.22); border-radius: 9px; padding: 16px 20px; display: flex; align-items: center; gap: 13px; margin-top: 15px; }
+    .complete-icon { font-size: 1.7rem; }
+    .complete-text h3 { font-size: 14px; margin-bottom: 2px; }
+    .complete-text p { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+
+    .btn-row { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 13px; }
+
+    a.btn-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 12.5px; font-weight: 700; text-decoration: none; transition: all 0.15s; }
+    a.btn-link.teal { background: transparent; color: var(--accent2); border: 1px solid var(--accent2); }
+    a.btn-link.teal:hover { background: rgba(56,217,169,0.07); }
+    a.btn-link.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    a.btn-link.ghost:hover { border-color: var(--muted); color: var(--text); }
+
+    hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+    .hidden { display: none !important; }
+
+    @media (max-width: 1100px) {
+      .app-preview { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+      .viewer img { max-height: 52vh; }
+      .footer { grid-template-columns: 1fr; text-align: center; }
+      .nav-group { justify-content: center; }
+      .kbd-note { text-align: center; }
+      .details-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .sidebar, .viewer-wrap { padding: 13px; }
+      textarea { min-height: 150px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">⚡ ImageSync</div>
+  <nav class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('preview')" id="tab-preview">
+      <span class="tab-dot"></span> Предпросмотр и валидация
+    </button>
+    <button class="tab-btn" onclick="switchTab('downloader')" id="tab-downloader">
+      <span class="tab-dot"></span> Скачать из Excel
+    </button>
+  </nav>
+</div>
+
+<!-- PAGE 1 — PREVIEW -->
+<div class="page active" id="page-preview">
+  <div class="app-preview">
+    <aside class="sidebar">
+      <h1>Предпросмотр картинок</h1>
+      <p class="subtitle">Показывает изображения и определяет доступность для программного скачивания или наличие блокировок.</p>
+
+      <label for="urlsInput">Список URL картинок</label>
+      <textarea id="urlsInput" spellcheck="false">https://picsum.photos/id/1/800/600
+
+https://picsum.photos/id/2/800/600
+
+https://picsum.photos/id/3/800/600</textarea>
+
+      <div class="controls">
+        <button id="loadBtn" class="btn-primary" type="button">Показать галерею</button>
+        <button id="clearBtn" class="btn-secondary" type="button">Очистить</button>
+      </div>
+
+      <div id="statusBox" class="info-box status">Загружено 0 ссылок</div>
+
+      <div id="preloadStatus" class="info-box preload">
+        Проверка: 0 из 0
+        <div class="prog-bar-bg"><div id="progressBar" class="prog-bar-fill fill-green"></div></div>
+      </div>
+
+      <div id="messageBox" class="info-box message" role="status" aria-live="polite"></div>
+
+      <div class="info-box legend">
+        <strong style="font-size:11.5px">Статусы:</strong><br>
+        <span class="badge badge-ok">Открывается</span> — картинка видна в браузере<br>
+        <span class="badge badge-ok">Fetch OK</span> — JS может читать, скачивание доступно<br>
+        <span class="badge badge-warn">CORS/Unknown</span> — картинка есть, JS-доступ ограничен<br>
+        <span class="badge badge-error">Похоже на блокировку</span> — 403/429 или ошибка загрузки
+      </div>
+
+      <div class="links-panel">
+        <div class="links-panel-header">Список ссылок</div>
+        <div id="linksList" class="links-list">
+          <div class="empty-links">После загрузки здесь появится список ссылок.</div>
+        </div>
+      </div>
+
+      <div class="info-box hint" style="margin-top:11px">
+        Проверка работает в рамках браузера и не обходит защиту.
+      </div>
+    </aside>
+
+    <main>
+      <div class="viewer-wrap">
+        <div class="viewer" aria-live="polite">
+          <div id="viewerStage" class="viewer-stage">
+            <div class="placeholder">
+              <h2>Галерея не загружена</h2>
+              <p>Вставьте ссылки слева и нажмите «Показать галерею».</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div class="nav-group">
+            <button id="prevBtn" class="nav-btn" type="button" aria-label="Предыдущая">◀</button>
+            <button id="nextBtn" class="nav-btn" type="button" aria-label="Следующая">▶</button>
+          </div>
+          <div class="meta">
+            <div id="counter" class="counter">0 из 0</div>
+            <div id="currentUrl" class="url-line empty-state">URL текущей картинки появится здесь</div>
+          </div>
+          <div class="kbd-note">← предыдущая &nbsp; → следующая</div>
+        </div>
+
+        <div class="details-box">
+          <h3>Диагностика текущей ссылки</h3>
+          <div class="details-grid">
+            <div class="details-key">Статус</div><div id="d-status" class="details-val">—</div>
+            <div class="details-key">Открывается в &lt;img&gt;</div><div id="d-preview" class="details-val">—</div>
+            <div class="details-key">Читается через fetch</div><div id="d-fetch" class="details-val">—</div>
+            <div class="details-key">HTTP статус</div><div id="d-http" class="details-val">—</div>
+            <div class="details-key">Content-Type</div><div id="d-type" class="details-val">—</div>
+            <div class="details-key">Финальный URL</div><div id="d-final" class="details-val">—</div>
+            <div class="details-key">Комментарий</div><div id="d-note" class="details-val">—</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- PAGE 2 — DOWNLOADER -->
+<div class="page" id="page-downloader">
+  <div class="app-dl">
+    <div class="dl-title">Скачать изображения из Excel</div>
+    <div class="dl-sub">// загрузите .xlsx → скачайте картинки → получите файл с локальными путями</div>
+
+    <div class="card">
+      <div class="card-label">01 — Загрузка файла</div>
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".xlsx,.csv">
+        <span class="drop-icon">📊</span>
+        <div class="drop-text">Перетащите файл или нажмите для выбора</div>
+        <div class="drop-hint">.xlsx / .csv (UTF-8, разделитель ;) · макс. 50 МБ · колонка «Детальная картинка (путь)»</div>
+      </div>
+      <div id="uploadStatus" class="hidden" style="margin-top:13px">
+        <div style="display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px">
+          <span id="uploadIcon">⏳</span><span id="uploadText">Загрузка...</span>
+        </div>
+        <div id="previewBlock" class="hidden">
+          <hr>
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;font-size:13px;font-weight:600">
+            Предпросмотр
+            <span id="totalRowsBadge" class="badge badge-violet">0 строк</span>
+            <span id="withUrlsBadge" class="badge badge-teal">0 с URL</span>
+          </div>
+          <table class="preview-table">
+            <thead><tr><th>Наименование</th><th>URL изображения</th></tr></thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">02 — Настройки</div>
+      <div class="field">
+        <label>Домен для замены URL</label>
+        <input type="text" id="domainInput" value="https://yourdomain.com">
+      </div>
+      <div class="domain-preview">Пример: <span id="domainPreview">https://yourdomain.com/images/Huawei_Model.jpg</span></div>
+      <div class="btn-row">
+        <button class="btn-violet" id="startBtn" disabled onclick="startDownload()">▶ Начать скачивание</button>
+      </div>
+    </div>
+
+    <div class="card hidden" id="progressCard">
+      <div class="card-label">03 — Прогресс</div>
+      <div class="stats-row">
+        <div class="stat s-total"><div class="stat-val" id="statTotal">0</div><div class="stat-lbl">Всего</div></div>
+        <div class="stat s-ok"><div class="stat-val" id="statDl">0</div><div class="stat-lbl">Скачано</div></div>
+        <div class="stat s-skip"><div class="stat-val" id="statSkip">0</div><div class="stat-lbl">Пропущено</div></div>
+        <div class="stat s-err"><div class="stat-val" id="statErr">0</div><div class="stat-lbl">Ошибки</div></div>
+      </div>
+      <div class="prog-labels">
+        <span id="dlProgressText">0 / 0</span><span id="dlProgressPct">0%</span>
+      </div>
+      <div class="prog-bar-bg"><div class="prog-bar-fill fill-blue" id="dlProgressFill" style="width:0%"></div></div>
+      <div class="current-file" id="currentFileDiv">
+        <div class="pulse"></div><span id="currentFileName">Ожидание...</span>
+      </div>
+      <div id="completeBanner" class="complete-banner hidden">
+        <span class="complete-icon">✅</span>
+        <div class="complete-text">
+          <h3>Обработка завершена!</h3>
+          <p id="completeSubtext">Скачайте файлы ниже</p>
+        </div>
+      </div>
+      <div class="btn-row" id="downloadBtns" style="display:none">
+        <a class="btn-link teal" href="/download-result">📥 Скачать обновлённый Excel</a>
+        <a class="btn-link ghost" href="/download-errors" id="downloadErrorsBtn">📋 Скачать лог ошибок</a>
+      </div>
+    </div>
+
+    <div class="card hidden" id="errorsCard">
+      <div class="card-label">Лог ошибок <span id="errCountBadge" class="badge badge-error" style="text-transform:none;letter-spacing:0">0</span></div>
+      <div class="error-log" id="errorLog"><span style="color:var(--muted)">Ошибок нет</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─── TAB SWITCHING ─── */
+function switchTab(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+/* ─── PAGE 1: PREVIEW ─── */
+(function () {
+  const urlsInput = document.getElementById('urlsInput');
+  const loadBtn = document.getElementById('loadBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const viewerStage = document.getElementById('viewerStage');
+  const counter = document.getElementById('counter');
+  const currentUrlEl = document.getElementById('currentUrl');
+  const statusBox = document.getElementById('statusBox');
+  const messageBox = document.getElementById('messageBox');
+  const preloadStatus = document.getElementById('preloadStatus');
+  const progressBar = document.getElementById('progressBar');
+  const linksList = document.getElementById('linksList');
+  const dStatus = document.getElementById('d-status');
+  const dPreview = document.getElementById('d-preview');
+  const dFetch = document.getElementById('d-fetch');
+  const dHttp = document.getElementById('d-http');
+  const dType = document.getElementById('d-type');
+  const dFinal = document.getElementById('d-final');
+  const dNote = document.getElementById('d-note');
+
+  let galleryUrls = [], currentIndex = -1, galleryActive = false;
+  let imageCache = new Map(), preloadToken = 0;
+  let preloadStats = { done:0, total:0, success:0, error:0 };
+
+  const esc = str => String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
+  const parseUrls = text => text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+
+  function setMessage(text, type='warn') {
+    messageBox.textContent = text; messageBox.classList.add('show');
+    messageBox.style.background = type==='error' ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+    messageBox.style.borderColor = type==='error' ? 'rgba(239,68,68,0.22)' : 'rgba(245,158,11,0.22)';
+    messageBox.style.color = type==='error' ? '#fecaca' : '#fde68a';
+  }
+  function clearMessage() { messageBox.textContent=''; messageBox.classList.remove('show'); }
+  function resetCache() { imageCache=new Map(); preloadToken++; preloadStats={done:0,total:0,success:0,error:0}; updatePreloadStatus(); }
+  function updateStatus() { statusBox.textContent=`Загружено ${galleryUrls.length} ссылок`; }
+  function updatePreloadStatus() {
+    const {done,total,success,error}=preloadStats;
+    preloadStatus.firstChild.textContent=`Проверка: ${done} из ${total} (успешно: ${success}, проблем: ${error}) `;
+    progressBar.style.width = total ? `${(done/total)*100}%` : '0%';
+  }
+  function getRecord(url) { return imageCache.get(url)||null; }
+
+  function classifyRecord(r) {
+    if (!r) return { label:'Ожидание', badgeClass:'badge-muted', note:'Проверка не запускалась.' };
+    const pOK=r.previewStatus==='loaded', fOK=r.fetchStatus==='success', fBlocked=r.fetchStatus==='cors-blocked';
+    const hardFail=r.previewStatus==='error'||r.fetchStatus==='http-error'||r.fetchStatus==='network-error';
+    const looksHtml=r.contentType&&!r.contentType.startsWith('image/');
+    const looksBlocked=[403,429,503].includes(r.httpStatus);
+    if (pOK&&fOK&&!looksHtml) return {label:'Можно открыть и читать',badgeClass:'badge-ok',note:'Картинка открывается и ответ читается через fetch.'};
+    if (pOK&&fBlocked) return {label:'Открывается, JS-чтение ограничено',badgeClass:'badge-warn',note:'Картинка видна, JS не может прочитать ответ (CORS).'};
+    if (pOK&&looksHtml) return {label:'Подозрительно: ответ не image/*',badgeClass:'badge-warn',note:'Сервер вернул не image/* — возможен редирект или заглушка.'};
+    if (hardFail||looksBlocked) return {label:'Похоже на блокировку или ошибку',badgeClass:'badge-error',note:'Сервер ограничивает доступ или ссылка недоступна.'};
+    return {label:'Не удалось определить',badgeClass:'badge-warn',note:'Неоднозначный результат.'};
+  }
+
+  function recordBadges(r) {
+    if (!r) return `<span class="badge badge-muted">Ожидание</span>`;
+    const p = r.previewStatus==='loaded' ? `<span class="badge badge-ok">Открывается</span>` : r.previewStatus==='error' ? `<span class="badge badge-error">IMG error</span>` : `<span class="badge badge-muted">IMG...</span>`;
+    const f = r.fetchStatus==='success' ? `<span class="badge badge-ok">Fetch OK</span>` : r.fetchStatus==='cors-blocked' ? `<span class="badge badge-warn">CORS/Unknown</span>` : r.fetchStatus==='http-error' ? `<span class="badge badge-error">HTTP ${r.httpStatus||''}</span>` : r.fetchStatus==='network-error' ? `<span class="badge badge-error">Fetch error</span>` : `<span class="badge badge-muted">Fetch...</span>`;
+    const cls=classifyRecord(r);
+    return p+f+`<span class="badge ${cls.badgeClass}">${esc(cls.label)}</span>`;
+  }
+
+  function renderLinksList() {
+    if (!galleryUrls.length) { linksList.innerHTML='<div class="empty-links">После загрузки здесь появится список ссылок.</div>'; return; }
+    linksList.innerHTML = galleryUrls.map((url,i) => `<button class="link-item ${i===currentIndex?'active':''}" type="button" data-index="${i}" title="${esc(url)}"><span class="link-index">${i+1}</span><span class="link-text-wrap"><span class="link-text">${esc(url)}</span><span class="link-meta">${recordBadges(getRecord(url))}</span></span></button>`).join('');
+  }
+
+  function updateActiveLink() {
+    linksList.querySelectorAll('.link-item').forEach(item => item.classList.toggle('active', Number(item.dataset.index)===currentIndex));
+    const active = linksList.querySelector('.link-item.active');
+    if (active) active.scrollIntoView({ block:'nearest' });
+  }
+
+  function refreshLinksStatuses() {
+    linksList.querySelectorAll('.link-item').forEach(item => {
+      const wrap = item.querySelector('.link-meta');
+      if (wrap) wrap.innerHTML = recordBadges(getRecord(galleryUrls[Number(item.dataset.index)]));
+    });
+  }
+
+  function updateDetails() {
+    if (!galleryActive||currentIndex<0||!galleryUrls[currentIndex]) {
+      [dStatus,dPreview,dFetch,dHttp,dType,dFinal,dNote].forEach(el=>el.textContent='—'); return;
+    }
+    const url=galleryUrls[currentIndex]; const r=getRecord(url); const cls=classifyRecord(r);
+    dStatus.textContent=cls.label;
+    dPreview.textContent=!r?'ожидание':r.previewStatus==='loaded'?'да':r.previewStatus==='error'?'нет':'проверяется';
+    dFetch.textContent=!r?'ожидание':r.fetchStatus==='success'?'да':r.fetchStatus==='cors-blocked'?'нет, ответ не читается из JS':r.fetchStatus==='http-error'||r.fetchStatus==='network-error'?'нет':'проверяется';
+    dHttp.textContent=r?.httpStatus??'—'; dType.textContent=r?.contentType||'—'; dFinal.textContent=r?.finalUrl||url||'—';
+    dNote.textContent=cls.note+(r?.errorText?' '+r.errorText:'');
+  }
+
+  function updateMeta() {
+    const total=galleryUrls.length;
+    if (!galleryActive||total===0||currentIndex<0) {
+      counter.textContent='0 из 0'; currentUrlEl.textContent='URL текущей картинки появится здесь';
+      currentUrlEl.title=''; currentUrlEl.classList.add('empty-state');
+      prevBtn.disabled=nextBtn.disabled=true; updateActiveLink(); updateDetails(); return;
+    }
+    const url=galleryUrls[currentIndex];
+    counter.textContent=`${currentIndex+1} из ${total}`; currentUrlEl.classList.remove('empty-state');
+    currentUrlEl.title=url; currentUrlEl.innerHTML=`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`;
+    prevBtn.disabled=currentIndex===0; nextBtn.disabled=currentIndex===total-1;
+    updateActiveLink(); updateDetails();
+  }
+
+  function showPlaceholder(title,text,isError=false) { viewerStage.innerHTML=`<div class="placeholder ${isError?'error-box':''}"><h2>${esc(title)}</h2><p>${esc(text)}</p></div>`; }
+  function showLoading(url) { viewerStage.innerHTML=`<div class="loading"><div class="spinner"></div><h2>Загрузка...</h2><p>${esc(url)}</p></div>`; }
+  function showError(url,extra='') { viewerStage.innerHTML=`<div class="placeholder error-box"><h2>Ошибка загрузки</h2><p>${esc((extra?url+'\n'+extra:url)).replaceAll('\n','<br>')}</p></div>`; }
+
+  function fetchWithTimeout(url,opts={},ms=8000) {
+    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),ms);
+    return fetch(url,{...opts,signal:ctrl.signal}).finally(()=>clearTimeout(t));
+  }
+
+  async function validateViaFetch(url,record) {
+    for (const method of ['HEAD','GET']) {
+      try {
+        const res=await fetchWithTimeout(url,{method,mode:'cors',credentials:'omit',cache:'force-cache',redirect:'follow'});
+        record.httpStatus=res.status; record.finalUrl=res.url||url; record.contentType=res.headers.get('content-type')||'';
+        if (!res.ok) { record.fetchStatus='http-error'; record.errorText=`HTTP ${res.status}`; return; }
+        record.fetchStatus='success'; return;
+      } catch(err) { if (err?.name==='AbortError') { record.fetchStatus='network-error'; record.errorText='Таймаут.'; return; } }
+    }
+    record.fetchStatus='cors-blocked'; record.errorText='CORS или ограничения хоста.';
+  }
+
+  function createImageLoader(url) {
+    if (imageCache.has(url)) return imageCache.get(url);
+    const record={url,img:null,promise:null,previewStatus:'loading',fetchStatus:'loading',contentType:'',finalUrl:url,httpStatus:null,errorText:''};
+    record.promise=new Promise(resolve=>{
+      let imgDone=false,fetchDone=false;
+      function maybe() { refreshLinksStatuses(); updateDetails(); if (imgDone&&fetchDone) resolve(record); }
+      const img=new Image(); img.decoding='async';
+      img.onload=()=>{record.previewStatus='loaded';record.img=img;imgDone=true;maybe();};
+      img.onerror=()=>{record.previewStatus='error';if(!record.errorText)record.errorText='Картинка не открылась в <img>.';imgDone=true;maybe();};
+      img.src=url;
+      validateViaFetch(url,record).then(()=>{fetchDone=true;maybe();}).catch(()=>{record.fetchStatus='network-error';if(!record.errorText)record.errorText='Ошибка fetch.';fetchDone=true;maybe();});
+    });
+    imageCache.set(url,record); refreshLinksStatuses(); updateDetails(); return record;
+  }
+
+  async function renderImage(url) {
+    const record=createImageLoader(url);
+    if (record.previewStatus==='loaded'&&record.img) { viewerStage.innerHTML=''; viewerStage.appendChild(record.img.cloneNode(false)); updateDetails(); return; }
+    if (record.previewStatus==='error') { showError(url,record.errorText); updateDetails(); return; }
+    showLoading(url);
+    const result=await record.promise;
+    if (!galleryActive||galleryUrls[currentIndex]!==url) return;
+    if (result.previewStatus==='loaded'&&result.img) { viewerStage.innerHTML=''; viewerStage.appendChild(result.img.cloneNode(false)); }
+    else showError(url,result.errorText||'Ошибка загрузки.');
+    updateDetails();
+  }
+
+  async function preloadAllImages(urls,token) {
+    let pointer=0;
+    async function worker() {
+      while (pointer<urls.length) {
+        if (token!==preloadToken) return;
+        const i=pointer++; const record=createImageLoader(urls[i]);
+        await record.promise;
+        if (token!==preloadToken) return;
+        preloadStats.done++;
+        const cls=classifyRecord(record);
+        if (cls.badgeClass==='badge-ok'||cls.badgeClass==='badge-warn') preloadStats.success++;
+        else preloadStats.error++;
+        updatePreloadStatus(); refreshLinksStatuses(); updateDetails();
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(5,urls.length)},worker));
+  }
+
+  function goTo(index) {
+    if (!galleryActive||!galleryUrls.length) return;
+    if (index<0) { setMessage('Это первая картинка.'); return; }
+    if (index>=galleryUrls.length) { setMessage('Это последняя картинка.'); return; }
+    clearMessage(); currentIndex=index; updateMeta(); renderImage(galleryUrls[currentIndex]);
+  }
+
+  loadBtn.addEventListener('click', ()=>{
+    clearMessage();
+    const parsed=parseUrls(urlsInput.value); resetCache();
+    galleryUrls=parsed; currentIndex=parsed.length?0:-1; galleryActive=parsed.length>0;
+    preloadStats.total=parsed.length; updateStatus(); renderLinksList(); updateMeta(); updatePreloadStatus();
+    if (!parsed.length) { showPlaceholder('Список пуст','Добавьте хотя бы один URL.'); setMessage('Не найдено ни одной ссылки.','error'); return; }
+    goTo(0);
+    const token=preloadToken;
+    preloadAllImages(parsed,token).catch(()=>{ if (token===preloadToken) setMessage('Ошибка при фоновой проверке.','error'); });
+  });
+
+  clearBtn.addEventListener('click', ()=>{
+    urlsInput.value=''; galleryUrls=[]; currentIndex=-1; galleryActive=false;
+    clearMessage(); resetCache(); updateStatus(); renderLinksList(); updateMeta();
+    showPlaceholder('Поле очищено','Вставьте новые ссылки и загрузите галерею.');
+  });
+
+  prevBtn.addEventListener('click', ()=>goTo(currentIndex-1));
+  nextBtn.addEventListener('click', ()=>goTo(currentIndex+1));
+  linksList.addEventListener('click', e=>{ const item=e.target.closest('.link-item'); if (item) goTo(Number(item.dataset.index)); });
+
+  document.addEventListener('keydown', e=>{
+    if (!document.getElementById('page-preview').classList.contains('active')||!galleryActive) return;
+    if (e.key==='ArrowLeft') { e.preventDefault(); goTo(currentIndex-1); }
+    if (e.key==='ArrowRight') { e.preventDefault(); goTo(currentIndex+1); }
+  });
+
+  updateStatus(); renderLinksList(); updateMeta(); updatePreloadStatus();
+})();
+
+/* ─── PAGE 2: DOWNLOADER ─── */
+(function () {
+  let polling = null;
+
+  const dz = document.getElementById('dropzone');
+  dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', ()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e=>{ e.preventDefault(); dz.classList.remove('dragover'); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+  document.getElementById('fileInput').addEventListener('change', e=>{ if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+  document.getElementById('domainInput').addEventListener('input', e=>{
+    document.getElementById('domainPreview').textContent = e.target.value.replace(/\/$/,'')+'/images/Huawei_Model.jpg';
+  });
+
+  async function handleFile(file) {
+    document.getElementById('uploadStatus').classList.remove('hidden');
+    document.getElementById('uploadIcon').textContent='⏳';
+    document.getElementById('uploadText').textContent=`Загрузка ${file.name}...`;
+    document.getElementById('previewBlock').classList.add('hidden');
+    const fd=new FormData(); fd.append('file',file);
+    try {
+      const data=await (await fetch('/upload',{method:'POST',body:fd})).json();
+      if (!data.success) throw new Error(data.error);
+      document.getElementById('uploadIcon').textContent='✅';
+      document.getElementById('uploadText').textContent=`Файл загружен: ${file.name}`;
+      document.getElementById('totalRowsBadge').textContent=`${data.total} строк`;
+      document.getElementById('withUrlsBadge').textContent=`${data.withUrls} с URL`;
+      const tbody=document.getElementById('previewBody'); tbody.innerHTML='';
+      data.preview.forEach(row=>{ const tr=document.createElement('tr'); tr.innerHTML=`<td title="${row.name||''}">${row.name||'—'}</td><td title="${row.url||''}">${row.url||'—'}</td>`; tbody.appendChild(tr); });
+      document.getElementById('previewBlock').classList.remove('hidden');
+      document.getElementById('startBtn').disabled=false;
+    } catch(err) {
+      document.getElementById('uploadIcon').textContent='❌';
+      document.getElementById('uploadText').textContent=`Ошибка: ${err.message}`;
+    }
+  }
+
+  window.startDownload = async function() {
+    const domain=document.getElementById('domainInput').value.trim();
+    document.getElementById('startBtn').disabled=true;
+    document.getElementById('progressCard').classList.remove('hidden');
+    document.getElementById('errorsCard').classList.remove('hidden');
+    document.getElementById('completeBanner').classList.add('hidden');
+    document.getElementById('downloadBtns').style.display='none';
+    document.getElementById('errorLog').innerHTML='<span style="color:var(--muted)">Ошибок нет</span>';
+    const data=await (await fetch('/download-images',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain})})).json();
+    document.getElementById('statTotal').textContent=data.total;
+    polling=setInterval(updateProgress,1200);
+  };
+
+  async function updateProgress() {
+    try {
+      const s=await (await fetch('/progress')).json();
+      document.getElementById('statTotal').textContent=s.total;
+      document.getElementById('statDl').textContent=s.downloaded;
+      document.getElementById('statSkip').textContent=s.skipped;
+      document.getElementById('statErr').textContent=s.errors;
+      const pct=s.total>0?Math.round(s.current/s.total*100):0;
+      document.getElementById('dlProgressFill').style.width=pct+'%';
+      document.getElementById('dlProgressText').textContent=`${s.current} / ${s.total}`;
+      document.getElementById('dlProgressPct').textContent=pct+'%';
+      document.getElementById('currentFileName').textContent=s.currentName||'...';
+      if (s.errorsLog&&s.errorsLog.length>0) {
+        document.getElementById('errCountBadge').textContent=s.errors;
+        const log=document.getElementById('errorLog');
+        log.innerHTML=s.errorsLog.map(e=>`<div class="err-entry"><span class="err-row">#${e.row}</span><span class="err-name" title="${e.url}">${e.name}</span><span class="err-code">${e.error}</span></div>`).join('');
+        log.scrollTop=log.scrollHeight;
+      }
+      if (s.done) {
+        clearInterval(polling);
+        document.getElementById('currentFileDiv').innerHTML='';
+        document.getElementById('completeBanner').classList.remove('hidden');
+        document.getElementById('completeSubtext').textContent=`✅ ${s.downloaded} скачано · ❌ ${s.errors} ошибок · ➖ ${s.skipped} пропущено`;
+        document.getElementById('downloadBtns').style.display='flex';
+        if (s.errors===0) document.getElementById('downloadErrorsBtn').style.display='none';
+      }
+    } catch(err) { console.error(err); }
+  }
+})();
+</script>
+</body>
+</html>
