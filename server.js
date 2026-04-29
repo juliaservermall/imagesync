@@ -154,16 +154,52 @@ async function downloadImage(url, destPath, retries) {
         url: url,
         headers: headers,
         responseType: 'stream',
-        timeout: 15000,
+        timeout: 120000,
         maxRedirects: 5,
       });
       const ct = response.headers['content-type'] || '';
       if (!ct.startsWith('image/')) throw new Error('Not an image: ' + ct);
+      // Таймаут на скачивание потока — 120 секунд
       await new Promise(function(resolve, reject) {
         const writer = fs.createWriteStream(destPath);
+        writer.setMaxListeners(20);
+        let finished = false;
+
+        const timer = setTimeout(function() {
+          if (!finished) {
+            finished = true;
+            response.data.destroy();
+            writer.destroy();
+            try { fs.unlinkSync(destPath); } catch(e) {}
+            reject(new Error('Таймаут скачивания (120 сек)'));
+          }
+        }, 120000);
+
         response.data.pipe(writer);
-        writer.on('finish', resolve);
-        writer.on('error', reject);
+
+        writer.on('finish', function() {
+          if (!finished) {
+            finished = true;
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+
+        writer.on('error', function(err) {
+          if (!finished) {
+            finished = true;
+            clearTimeout(timer);
+            reject(err);
+          }
+        });
+
+        response.data.on('error', function(err) {
+          if (!finished) {
+            finished = true;
+            clearTimeout(timer);
+            reject(err);
+          }
+        });
       });
       return { success: true, contentType: ct };
     } catch (err) {
