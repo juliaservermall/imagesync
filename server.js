@@ -1,0 +1,269 @@
+cat > /opt/imagesync/server.js << 'EOF'
+const express = require('express');
+const multer = require('multer');
+const axios = require('axios');
+const XLSX = require('xlsx');
+const path = require('path');
+const fs = require('fs');
+const cors = require('cors');
+
+const app = express();
+const PORT = process.env.PORT || 3224;
+
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const IMAGES_DIR = path.join(__dirname, 'images');
+[UPLOAD_DIR, IMAGES_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
+
+let progressState = {
+  running: false, total: 0, current: 0, currentName: '',
+  downloaded: 0, skipped: 0, errors: 0,
+  errorsLog: [], done: false, resultFile: null, resultIsCsv: false,
+};
+
+const upload = multer({
+  dest: UPLOAD_DIR,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.mimetype === 'text/csv' || file.mimetype === 'application/csv' ||
+      file.originalname.endsWith('.xlsx') || file.originalname.endsWith('.csv');
+    ok ? cb(null, true) : cb(new Error('Only .xlsx or .csv'));
+  },
+});
+
+app.use(cors());
+app.use(express.json());
+app.use('/images', express.static(IMAGES_DIR, {
+  setHeaders: res => res.setHeader('X-Robots-Tag', 'noindex, nofollow'),
+}));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain');
+  res.send('User-agent: *\nDisallow: /images/\nDisallow: /uploads/');
+});
+
+const IMAGE_COLUMN_NAME = 'Детальная картинка (путь)';
+
+function parseCsv(filePath) {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const clean = content.replace(/^\uFEFF/, '');
+  const lines = clean.split(/\r?\n/);
+
+  function parseLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === ';' && !inQuotes) {
+        result.push(current); current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current);
+    return result;
+  }
+  return lines.filter(l => l.trim() !== '').map(l => parseLine(l));
+}
+
+function parseFile(filePath, originalName) {
+  const isCsv = originalName.toLowerCase().endsWith('.csv');
+  let rows;
+
+  if (isCsv) {
+    rows = parseCsv(filePath);
+  } else {
+    const wb = XLSX.readFile(filePath, { codepage: 65001 });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  }
+
+  if (!rows.length) return { headers: [], parsedRows: [], imageColIndex: -1 };
+
+  const headers = rows[0].map(h => String(h || '').trim());
+  const imageColIndex = headers.findIndex(h => h === IMAGE_COLUMN_NAME);
+
+  const parsedRows = rows.slice(1).map((row, i) => {
+    const cells = headers.map((_, ci) => String(row[ci] ?? ''));
+    const url = imageColIndex >= 0 ? cells[imageColIndex] : '';
+    const name = cells[0] || '';
+    return { rowIndex: i + 1, name, url, cells };
+  });
+
+  return { headers, parsedRows, imageColIndex };
+}
+
+function generateFilename(productName, contentType) {
+  const extMap = {
+    'image/jpeg': '.jpg', 'image/jpg': '.jpg',
+    'image/png': '.png', 'image/gif': '.gif',
+    'image/webp': '.webp', 'image/svg+xml': '.svg',
+  };
+  const ext = extMap[contentType?.split(';')[0]?.trim()] || '.jpg';
+  const cleaned = productName.replace(/[^\w\s\-]/g, ' ').trim();
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  const brand = words[0] || 'Unknown';
+  const model = words.find((w, i) => i > 0 && /\d/.test(w)) || words.slice(1, 3).join('_') || 'item';
+  return `${brand}_${model}`.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_') + ext;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const randDelay = () => sleep(1000 + Math.random() * 2000);
+
+async function downloadImage(url, destPath, retries = 3) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://www.google.com/',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+  };
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await axios({
+        method: 'GET', url, headers,
+        responseType: 'stream', timeout: 15000, maxRedirects: 5,
+      });
+      const ct = response.headers['content-type'] || '';
+      if (!ct.startsWith('image/')) throw new Error('Not an image');
+      await new Promise((resolve, reject) => {
+        const writer = fs.createWriteStream(destPath);
+        response.data.pipe(writer);
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+      return { success: true, contentType: ct };
+    } catch (err) {
+      if (attempt < retries) await sleep(1000 * attempt);
+      else throw err;
+    }
+  }
+}
+
+let currentFileInfo = { headers: [], parsedRows: [], imageColIndex: -1, originalName: '' };
+
+app.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    const { headers, parsedRows, imageColIndex } = parseFile(req.file.path, req.file.originalname);
+    currentFileInfo = { headers, parsedRows, imageColIndex, originalName: req.file.originalname };
+    if (imageColIndex === -1) {
+      return res.status(400).json({ success: false, error: `Column "${IMAGE_COLUMN_NAME}" not found` });
+    }
+    const withUrls = parsedRows.filter(r => r.url && String(r.url).startsWith('http')).length;
+    const preview = parsedRows.slice(0, 5).map(r => ({ name: r.name, url: r.url }));
+    res.json({ success: true, total: parsedRows.length, withUrls, preview, headers, imageColIndex, imageColName: IMAGE_COLUMN_NAME });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/download-images', async (req, res) => {
+  if (progressState.running) return res.status(409).json({ error: 'Already running' });
+
+  const domain = req.body.domain || 'https://yourdomain.com';
+  const { headers, parsedRows, imageColIndex, originalName } = currentFileInfo;
+
+  if (imageColIndex === -1) {
+    return res.status(400).json({ error: `Column "${IMAGE_COLUMN_NAME}" not found` });
+  }
+
+  progressState = {
+    running: true, total: 0, current: 0, currentName: '',
+    downloaded: 0, skipped: 0, errors: 0,
+    errorsLog: [], done: false, resultFile: null, resultIsCsv: false,
+  };
+
+  const urlRows = parsedRows.filter(r => r.url && String(r.url).startsWith('http'));
+  progressState.total = urlRows.length;
+
+  res.json({ success: true, total: urlRows.length });
+
+  (async () => {
+    const resultRows = [headers, ...parsedRows.map(r => [...r.cells])];
+
+    for (const row of urlRows) {
+      progressState.current++;
+      progressState.currentName = String(row.name).slice(0, 60);
+
+      try {
+        let contentType = 'image/jpeg';
+        try {
+          const headRes = await axios.head(row.url, {
+            timeout: 10000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          }).catch(() => null);
+          if (headRes) contentType = headRes.headers['content-type'] || contentType;
+        } catch (_) {}
+
+        const filename = generateFilename(String(row.name), contentType);
+        const destPath = path.join(IMAGES_DIR, filename);
+
+        await downloadImage(row.url, destPath);
+        resultRows[row.rowIndex][imageColIndex] = `${domain}/images/${filename}`;
+        progressState.downloaded++;
+      } catch (err) {
+        progressState.errors++;
+        progressState.errorsLog.push({
+          row: row.rowIndex + 1,
+          name: String(row.name).slice(0, 80),
+          url: String(row.url).slice(0, 200),
+          error: err.response ? `HTTP ${err.response.status}` : (err.code || err.message || 'Unknown error'),
+        });
+      }
+
+      await randDelay();
+    }
+
+    const isCsv = originalName.toLowerCase().endsWith('.csv');
+    let resultPath;
+
+    if (isCsv) {
+      const csvLines = resultRows.map(row =>
+        row.map(cell => {
+          const s = String(cell ?? '');
+          return /[;"'\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(';')
+      );
+      resultPath = path.join(UPLOAD_DIR, `result_${Date.now()}.csv`);
+      fs.writeFileSync(resultPath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
+    } else {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(resultRows);
+      XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+      resultPath = path.join(UPLOAD_DIR, `result_${Date.now()}.xlsx`);
+      XLSX.writeFile(wb, resultPath);
+    }
+
+    progressState.resultFile = resultPath;
+    progressState.resultIsCsv = isCsv;
+    progressState.running = false;
+    progressState.done = true;
+  })();
+});
+
+app.get('/progress', (req, res) => res.json(progressState));
+
+app.get('/download-result', (req, res) => {
+  if (!progressState.resultFile || !fs.existsSync(progressState.resultFile)) {
+    return res.status(404).json({ error: 'No result file' });
+  }
+  res.download(progressState.resultFile, progressState.resultIsCsv ? 'result_updated.csv' : 'result_updated.xlsx');
+});
+
+app.get('/download-errors', (req, res) => {
+  if (!progressState.errorsLog.length) return res.status(404).json({ error: 'No errors' });
+  const lines = ['Row\tName\tURL\tError', ...progressState.errorsLog.map(e => `${e.row}\t${e.name}\t${e.url}\t${e.error}`)].join('\n');
+  res.setHeader('Content-Disposition', 'attachment; filename="errors_log.tsv"');
+  res.setHeader('Content-Type', 'text/tab-separated-values');
+  res.send(lines);
+});
+
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
+EOF
