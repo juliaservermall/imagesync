@@ -18,6 +18,7 @@ let progressState = {
   downloaded: 0, skipped: 0, errors: 0,
   errorsLog: [], done: false, resultFile: null, resultIsCsv: false,
 };
+let stopRequested = false;
 
 const upload = multer({
   dest: UPLOAD_DIR,
@@ -46,6 +47,7 @@ app.get('/robots.txt', (req, res) => {
 });
 
 const IMAGE_COLUMN_NAME = 'Детальная картинка (путь)';
+const NAME_COLUMN_NAMES = ['Наименование элемента', 'Наименование'];
 
 function parseCsv(filePath) {
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -92,10 +94,18 @@ function parseFile(filePath, originalName) {
   const headers = rows[0].map(h => String(h || '').trim());
   const imageColIndex = headers.findIndex(h => h === IMAGE_COLUMN_NAME);
 
+  // Найти колонку с наименованием
+  let nameColIndex = -1;
+  for (const colName of NAME_COLUMN_NAMES) {
+    const idx = headers.findIndex(h => h === colName);
+    if (idx !== -1) { nameColIndex = idx; break; }
+  }
+
   const parsedRows = rows.slice(1).map((row, i) => {
     const cells = headers.map((_, ci) => String(row[ci] != null ? row[ci] : ''));
     const url = imageColIndex >= 0 ? cells[imageColIndex] : '';
-    const name = cells[0] || '';
+    // Использовать колонку наименования если найдена, иначе первую колонку
+    const name = (nameColIndex >= 0 ? cells[nameColIndex] : cells[0]) || '';
     return { rowIndex: i + 1, name, url, cells };
   });
 
@@ -112,11 +122,16 @@ function generateFilename(productName, contentType) {
     'image/svg+xml': '.svg',
   };
   const ext = extMap[contentType && contentType.split(';')[0].trim()] || '.jpg';
-  const cleaned = productName.replace(/[^\w\s\-]/g, ' ').trim();
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  const brand = words[0] || 'Unknown';
-  const model = words.find((w, i) => i > 0 && /\d/.test(w)) || words.slice(1, 3).join('_') || 'item';
-  return `${brand}_${model}`.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_') + ext;
+  // Использовать полное название, привести к нижнему регистру
+  const cleaned = productName
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9а-яёa-z\s\-]/gi, ' ')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  const filename = cleaned || 'image';
+  return filename + ext;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -226,6 +241,7 @@ app.post('/download-images', async function(req, res) {
     downloaded: 0, skipped: 0, errors: 0,
     errorsLog: [], done: false, resultFile: null, resultIsCsv: false,
   };
+  stopRequested = false;
 
   var urlRows = parsedRows.filter(function(r) {
     return r.url && String(r.url).startsWith('http');
@@ -240,6 +256,7 @@ app.post('/download-images', async function(req, res) {
     }));
 
     for (var i = 0; i < urlRows.length; i++) {
+      if (stopRequested) break;
       var row = urlRows[i];
       progressState.current++;
       progressState.currentName = String(row.name).slice(0, 60);
@@ -297,6 +314,7 @@ app.post('/download-images', async function(req, res) {
     progressState.resultIsCsv = isCsv;
     progressState.running = false;
     progressState.done = true;
+    progressState.stopped = stopRequested;
   })();
 });
 
@@ -324,6 +342,29 @@ app.get('/download-errors', function(req, res) {
   res.setHeader('Content-Disposition', 'attachment; filename="errors_log.tsv"');
   res.setHeader('Content-Type', 'text/tab-separated-values');
   res.send(lines);
+});
+
+app.post('/stop', function(req, res) {
+  stopRequested = true;
+  res.json({ success: true });
+});
+
+
+app.post('/clear-images', function(req, res) {
+  try {
+    var files = fs.readdirSync(IMAGES_DIR);
+    var deleted = 0;
+    files.forEach(function(file) {
+      var filePath = path.join(IMAGES_DIR, file);
+      try {
+        fs.unlinkSync(filePath);
+        deleted++;
+      } catch (e) {}
+    });
+    res.json({ success: true, deleted: deleted });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.listen(PORT, function() {
